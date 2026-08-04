@@ -6,7 +6,7 @@ from utils.skill_extractor import (
     load_skills, compare_skills, extract_skills,
     generate_suggestions, infer_job_role
 )
-from utils.history_tracker import save_history, load_user_history  # ✅ Add history tracking
+from utils.history_tracker import save_history, load_user_history
 import os
 import pandas as pd
 import json
