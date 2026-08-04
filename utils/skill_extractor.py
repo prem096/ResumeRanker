@@ -1,59 +1,98 @@
 import spacy
-from spacy.pipeline import EntityRuler
 import json
 import os
+import re
 
-# Load SpaCy model safely
 try:
     nlp = spacy.load("en_core_web_sm")
 except OSError:
     raise RuntimeError("Run `python -m spacy download en_core_web_sm` to install the model.")
 
-# Load skills.json: a dictionary of {canonical_skill: [synonyms]}
+_skills_cache = None
+_phrase_to_canonical = {}
+_ruler_skill_count = 0
+
+
 def load_skills(filepath="utils/skills.json"):
+    global _skills_cache, _phrase_to_canonical
+    if _skills_cache is not None:
+        return _skills_cache
+
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Skill file not found: {filepath}")
-    with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
 
-# Dynamically add skill patterns to SpaCy pipeline
-def add_skill_ruler(nlp, skill_dict):
+    with open(filepath, "r", encoding="utf-8") as f:
+        _skills_cache = json.load(f)
+
+    _phrase_to_canonical = {}
+    for canonical, synonyms in _skills_cache.items():
+        canonical_key = canonical.lower()
+        _phrase_to_canonical[canonical_key] = canonical_key
+        for phrase in synonyms:
+            _phrase_to_canonical[phrase.lower()] = canonical_key
+
+    return _skills_cache
+
+
+def _canonicalize(skill_phrase):
+    return _phrase_to_canonical.get(skill_phrase.lower(), skill_phrase.lower())
+
+
+def _ensure_skill_ruler(skill_dict):
+    """Add skill patterns after NER so they are not overwritten."""
+    global _ruler_skill_count
+
+    pattern_count = sum(len(synonyms) for synonyms in skill_dict.values())
+    if _ruler_skill_count == pattern_count and "entity_ruler" in nlp.pipe_names:
+        return
+
     if "entity_ruler" in nlp.pipe_names:
         nlp.remove_pipe("entity_ruler")
-    ruler = nlp.add_pipe("entity_ruler", before="ner", config={"overwrite_ents": True})
 
-    patterns = []
-    for canonical, synonyms in skill_dict.items():
-        for phrase in synonyms:
-            patterns.append({"label": "SKILL", "pattern": phrase})
+    # Place after NER so skill labels take precedence over GPE/PERSON/ORG
+    ruler = nlp.add_pipe("entity_ruler", last=True, config={"overwrite_ents": True})
+    patterns = [
+        {"label": "SKILL", "pattern": phrase}
+        for synonyms in skill_dict.values()
+        for phrase in synonyms
+    ]
     ruler.add_patterns(patterns)
+    _ruler_skill_count = pattern_count
 
-# Fallback chunks: for text that didn't match any patterns
-def extract_candidate_chunks(doc):
-    return [chunk.text.strip().lower() for chunk in doc.noun_chunks if len(chunk.text.strip()) > 2]
 
-# Main skill extractor
-def extract_skills(text, skill_dict, use_fallback_chunks=True):
-    add_skill_ruler(nlp, skill_dict)
+def _keyword_scan(text, skill_dict):
+    """Reliable dictionary scan with word-boundary matching."""
+    text_lower = text.lower()
+    detected = set()
+
+    for synonyms in skill_dict.values():
+        for phrase in synonyms:
+            phrase_lower = phrase.lower()
+            if len(phrase_lower) <= 3:
+                if re.search(rf"\b{re.escape(phrase_lower)}\b", text_lower):
+                    detected.add(_canonicalize(phrase_lower))
+            elif phrase_lower in text_lower:
+                detected.add(_canonicalize(phrase_lower))
+
+    return detected
+
+
+def extract_skills(text, skill_dict=None):
+    skill_dict = skill_dict or load_skills()
+    _ensure_skill_ruler(skill_dict)
     doc = nlp(text)
     detected = set()
 
-    # Extract entities labeled as SKILL
     for ent in doc.ents:
         if ent.label_ == "SKILL":
-            detected.add(ent.text.strip().lower())
+            detected.add(_canonicalize(ent.text.strip()))
 
-    # Optional fallback using noun chunks
-    if use_fallback_chunks:
-        known_phrases = {phrase.lower() for synonyms in skill_dict.values() for phrase in synonyms}
-        for chunk in extract_candidate_chunks(doc):
-            if chunk in known_phrases:
-                detected.add(chunk)
-
+    detected.update(_keyword_scan(text, skill_dict))
     return sorted(detected)
 
-# Skill overlap comparison
-def compare_skills(jd_text, resume_text, skill_dict):
+
+def compare_skills(jd_text, resume_text, skill_dict=None):
+    skill_dict = skill_dict or load_skills()
     jd_skills = set(extract_skills(jd_text, skill_dict))
     resume_skills = set(extract_skills(resume_text, skill_dict))
 
@@ -62,7 +101,7 @@ def compare_skills(jd_text, resume_text, skill_dict):
     extra = sorted(resume_skills - jd_skills)
     return matched, missing, extra
 
-# Suggestions based on missing skills
+
 def generate_suggestions(missing_skills, descriptions=None):
     suggestions = []
     descriptions = descriptions or {}
@@ -73,10 +112,11 @@ def generate_suggestions(missing_skills, descriptions=None):
         suggestions.append(line)
     return suggestions
 
-# Infer most likely role based on skill overlap
+
 def infer_job_role(resume_skills, role_skill_map):
     scores = {
-        role: len(set(resume_skills) & set(skills))
+        role: len(set(resume_skills) & {s.lower() for s in skills})
         for role, skills in role_skill_map.items()
     }
-    return max(scores, key=scores.get) if scores else "Unknown"
+    best_role = max(scores, key=scores.get) if scores else "Unknown"
+    return best_role if scores.get(best_role, 0) > 0 else "Unknown"

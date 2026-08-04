@@ -6,6 +6,7 @@ torch
 spacy
 weasyprint
 pandas
+numpy
 jinja2
 matplotlib
 PyMuPDF

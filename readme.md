@@ -13,7 +13,7 @@ ResumeRanker AI helps **recruiters** find the most suitable candidates from a ba
   - **Candidate Mode**: Upload your resume and multiple JDs → Get ranked jobs
 
 - 🧠 **AI/NLP Matching**:  
-  Uses BERT embeddings and SpaCy to match content meaningfully, not just by keywords.
+  Hybrid scoring combines BERT semantic similarity (50%), TF-IDF lexical matching (25%), and skill overlap (25%).
 
 - 📊 **Skill Analysis**:  
   Extracts **matched**, **missing**, and **extra skills** using a custom skill dictionary.
@@ -36,7 +36,7 @@ ResumeRanker AI helps **recruiters** find the most suitable candidates from a ba
 
 - **Frontend**: HTML5, Bootstrap 5
 - **Backend**: Flask (Python)
-- **AI Models**: BERT (from HuggingFace Transformers), SpaCy
+- **AI Models**: BERT (HuggingFace Transformers), TF-IDF (scikit-learn), SpaCy
 - **Database**: SQLite + SQLAlchemy
 - **PDF Generation**: WeasyPrint + Matplotlib
 - **Authentication**: Flask-Login
